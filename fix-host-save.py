@@ -16,12 +16,43 @@ UESAVE_TYPE_MAPS = [
 
 
 class GuidReplace:
-    pass
+    def __init__(self, new_guid: str, old_guid: str, name: str=''):
+        new_guid = new_guid.replace('-', '').lower().strip()
+        old_guid = old_guid.replace('-', '').lower().strip()
+        self.name = name
+        self.new_guid = new_guid
+        self.old_guid = old_guid
+        # Apply expected formatting for the GUID.
+        new_guid_formatted = "{}-{}-{}-{}-{}".format(
+            new_guid[:8], new_guid[8:12], new_guid[12:16], new_guid[16:20], new_guid[20:]
+        ).lower()
+        self.new_guid_formatted = new_guid_formatted
+
+        old_level_formatted = ""
+        new_level_formatted = ""
+        # Player GUIDs in a guild are stored as the decimal representation of their GUID.
+        # Every byte in decimal represents 2 hexidecimal characters of the GUID
+        # 32-bit little endian.
+        for y in range(8, 36, 8):
+            for x in range(y - 1, y - 9, -2):
+                temp_old = str(int(old_guid[x - 1] + old_guid[x], 16)) + ",\n"
+                temp_new = str(int(new_guid[x - 1] + new_guid[x], 16)) + ",\n"
+                old_level_formatted += temp_old
+                new_level_formatted += temp_new
+
+        old_level_formatted = old_level_formatted.rstrip("\n,")
+        new_level_formatted = new_level_formatted.rstrip("\n,")
+        self.old_level_formatted = list(map(int, old_level_formatted.split(",\n")))
+        self.new_level_formatted = list(map(int, new_level_formatted.split(",\n")))
+    def __repr__(self) -> str:
+        return f"Name({self.name});NewGuid({self.new_guid});OldGuid({self.old_guid})"
+    def __str__(self):
+        return self.__repr__()
 
 
 def main():
-    if len(sys.argv) < 5:
-        print("fix-host-save.py <uesave.exe> <save_path> <new_guid> <old_guid>")
+    if len(sys.argv) < 4:
+        print("fix-host-save.py <uesave.exe> <save_path> <guid_json>")
         exit(1)
 
     # Warn the user about potential data loss.
@@ -34,163 +65,138 @@ of your save folder before continuing. Press enter if you would like to continue
 
     uesave_path = Path(sys.argv[1])
     save_path = Path(sys.argv[2])
-    new_guid = sys.argv[3]
-    old_guid = sys.argv[4]
-    guid_list = Path(sys.argv[5])
+    guid_list = Path(sys.argv[3])
 
-    ids = []
-    with guid_list.open() as li:
-        ids = [i.replace("-", "").strip().lower().split(",") for i in li]
-
-    # Apply expected formatting for the GUID.
-
-    new_guid_formatted = "{}-{}-{}-{}-{}".format(
-        new_guid[:8], new_guid[8:12], new_guid[12:16], new_guid[16:20], new_guid[20:]
-    ).lower()
-    old_level_formatted = ""
-    new_level_formatted = ""
-
-    # Player GUIDs in a guild are stored as the decimal representation of their GUID.
-    # Every byte in decimal represents 2 hexidecimal characters of the GUID
-    # 32-bit little endian.
-    for y in range(8, 36, 8):
-        for x in range(y - 1, y - 9, -2):
-            temp_old = str(int(old_guid[x - 1] + old_guid[x], 16)) + ",\n"
-            temp_new = str(int(new_guid[x - 1] + new_guid[x], 16)) + ",\n"
-            old_level_formatted += temp_old
-            new_level_formatted += temp_new
-
-    old_level_formatted = old_level_formatted.rstrip("\n,")
-    new_level_formatted = new_level_formatted.rstrip("\n,")
-    old_level_formatted = list(map(int, old_level_formatted.split(",\n")))
-    new_level_formatted = list(map(int, new_level_formatted.split(",\n")))
-
-    level_sav_path = save_path / "Level.sav"
-    old_sav_path = save_path / "Players" / (old_guid.upper() + ".sav")
-    new_sav_path = save_path / "Players" / (new_guid.upper() + ".sav")
-    level_json_path = Path(str(level_sav_path) + ".json")
-    old_json_path = Path(str(old_sav_path) + ".json")
+    with guid_list.open('r') as j:
+        info: list[dict[str, str]] = json.load(j)
+        guid_info = [GuidReplace(new_guid=x.get('new'), old_guid=x.get('old'), name=x.get('name')) for x in info if x.get('new') and x.get('old')] # type: ignore
 
     # uesave_path must point directly to the executable, not just the path it is located in.
-    if not uesave_path.exists() or not uesave_path.is_file():
-        print(
-            'ERROR: Your given <uesave_path> of "'
-            + str(uesave_path)
-            + '" is invalid. It must point directly to the executable. For example: C:\\Users\\Bob\\.cargo\\bin\\uesave.exe'
-        )
-        exit(1)
+    assert uesave_path.exists() and uesave_path.is_file(), f'''
+ERROR: Your given <uesave_path> of "{uesave_path}" is invalid. 
+It must point directly to the executable. 
+For example: C:\\Users\\Bob\\.cargo\\bin\\uesave.exe
+    '''.strip()
 
-    # save_path must exist in order to use it.
-    if not save_path.exists():
-        print(
-            'ERROR: Your given <save_path> of "'
-            + str(save_path)
-            + '" does not exist. Did you enter the correct path to your save folder?'
-        )
-        exit(1)
+    assert save_path.exists(), f'''
+ERROR: Your given <save_path> of "{save_path}" does not exist. 
+Did you enter the correct path to your save folder?
+    '''.strip()
 
-    # The player needs to have created a character on the dedicated server and that save is used for this script.
-    if not new_sav_path.exists():
-        print(
-            'ERROR: Your player save does not exist. Did you enter the correct new GUID of your player? It should look like "8E910AC2000000000000000000000000".\nDid your player create their character with the provided save? Once they create their character, a file called "'
-            + new_sav_path
-            + '" should appear. Look back over the steps in the README on how to get your new GUID.'
-        )
-        exit(1)
 
-    # Convert save files to JSON so it is possible to edit them.
+    level_sav_path = save_path / "Level.sav"
+    level_json_path = level_sav_path.with_suffix(".json")
+    print("Loading level....")
     sav_to_json(uesave_path, level_sav_path)
-    sav_to_json(uesave_path, old_sav_path)
-    print("Converted save files to JSON")
-
-    # Parse our JSON files.
-    with open(old_json_path) as f:
-        old_json = json.load(f)
-    with open(level_json_path) as f:
+    with level_json_path.open() as f:
         level_json = json.load(f)
-    print("JSON files have been parsed")
+    print("Loading done")
 
-    # Replace all instances of the old GUID with the new GUID.
+    for g in guid_info:
+        old_sav_path = save_path / "Players" / (g.old_guid.upper() + ".sav")
+        new_sav_path = save_path / "Players" / (g.new_guid.upper() + ".sav")
+        old_json_path = old_sav_path.with_suffix(".json")
+        new_guid_formatted = g.new_guid_formatted
 
-    # Player data replacement.
-    old_json["root"]["properties"]["SaveData"]["Struct"]["value"]["Struct"][
-        "PlayerUId"
-    ]["Struct"]["value"]["Guid"] = new_guid_formatted
-    old_json["root"]["properties"]["SaveData"]["Struct"]["value"]["Struct"][
-        "IndividualId"
-    ]["Struct"]["value"]["Struct"]["PlayerUId"]["Struct"]["value"][
-        "Guid"
-    ] = new_guid_formatted
-    old_instance_id = old_json["root"]["properties"]["SaveData"]["Struct"]["value"][
-        "Struct"
-    ]["IndividualId"]["Struct"]["value"]["Struct"]["InstanceId"]["Struct"]["value"][
-        "Guid"
-    ]
 
-    # Level data replacement.
-    instance_ids_len = len(
-        level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"]["Struct"][
-            "CharacterSaveParameterMap"
-        ]["Map"]["value"]
-    )
-    for i in range(instance_ids_len):
-        instance_id = level_json["root"]["properties"]["worldSaveData"]["Struct"][
-            "value"
-        ]["Struct"]["CharacterSaveParameterMap"]["Map"]["value"][i]["key"]["Struct"][
+        assert new_sav_path.exists(),'''
+ERROR: Your player save does not exist. Did you enter the correct new GUID of your player? It should look like "8E910AC2000000000000000000000000".\nDid your player create their character with the provided save? 
+Once they create their character, a file called "{new_sav_path}" should appear. 
+Look back over the steps in the README on how to get your new GUID.
+'''.strip()
+
+        # Convert save files to JSON so it is possible to edit them.
+        sav_to_json(uesave_path, old_sav_path)
+        print("Converted save files to JSON")
+        # Parse our JSON files.
+        with old_json_path.open() as f:
+            old_json_sav = json.load(f)
+        print("JSON files have been parsed")
+
+        # Replace all instances of the old GUID with the new GUID.
+
+        # Player data replacement.
+        old_json_sav["root"]["properties"]["SaveData"]["Struct"]["value"]["Struct"][
+            "PlayerUId"
+        ]["Struct"]["value"]["Guid"] = g.new_guid_formatted
+        old_json_sav["root"]["properties"]["SaveData"]["Struct"]["value"]["Struct"][
+            "IndividualId"
+        ]["Struct"]["value"]["Struct"]["PlayerUId"]["Struct"]["value"][
+            "Guid"
+        ] = g.new_guid_formatted
+        old_instance_id = old_json_sav["root"]["properties"]["SaveData"]["Struct"]["value"][
             "Struct"
-        ]["InstanceId"]["Struct"]["value"]["Guid"]
-        if instance_id == old_instance_id:
-            level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"][
-                "Struct"
-            ]["CharacterSaveParameterMap"]["Map"]["value"][i]["key"]["Struct"][
-                "Struct"
-            ]["PlayerUId"]["Struct"]["value"]["Guid"] = new_guid_formatted
-            break
+        ]["IndividualId"]["Struct"]["value"]["Struct"]["InstanceId"]["Struct"]["value"][
+            "Guid"
+        ]
 
-    # Guild data replacement.
-    group_ids_len = len(
-        level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"]["Struct"][
-            "GroupSaveDataMap"
-        ]["Map"]["value"]
-    )
-    for i in range(group_ids_len):
-        group_id = level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"][
-            "Struct"
-        ]["GroupSaveDataMap"]["Map"]["value"][i]
-        if (
-            group_id["value"]["Struct"]["Struct"]["GroupType"]["Enum"]["value"]
-            == "EPalGroupType::Guild"
-        ):
-            group_raw_data = group_id["value"]["Struct"]["Struct"]["RawData"]["Array"][
+        # Level data replacement.
+        instance_ids_len = len(
+            level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"]["Struct"][
+                "CharacterSaveParameterMap"
+            ]["Map"]["value"]
+        )
+        for i in range(instance_ids_len):
+            instance_id = level_json["root"]["properties"]["worldSaveData"]["Struct"][
                 "value"
-            ]["Base"]["Byte"]["Byte"]
-            raw_data_len = len(group_raw_data)
-            for i in range(raw_data_len - 15):
-                if group_raw_data[i : i + 16] == old_level_formatted:
-                    group_raw_data[i : i + 16] = new_level_formatted
-    print("Changes have been made")
+            ]["Struct"]["CharacterSaveParameterMap"]["Map"]["value"][i]["key"]["Struct"][
+                "Struct"
+            ]["InstanceId"]["Struct"]["value"]["Guid"]
+            if instance_id == old_instance_id:
+                level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"][
+                    "Struct"
+                ]["CharacterSaveParameterMap"]["Map"]["value"][i]["key"]["Struct"][
+                    "Struct"
+                ]["PlayerUId"]["Struct"]["value"]["Guid"] = new_guid_formatted
+                break
+        print("Changes have been made to level for " + g.name)
 
-    # Dump modified data to JSON.
-    with open(old_json_path, "w") as f:
-        json.dump(old_json, f, indent=2)
-    with open(level_json_path, "w") as f:
+        # Guild data replacement.
+        group_ids_len = len(
+            level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"]["Struct"][
+                "GroupSaveDataMap"
+            ]["Map"]["value"]
+        )
+        for i in range(group_ids_len):
+            group_id = level_json["root"]["properties"]["worldSaveData"]["Struct"]["value"][
+                "Struct"
+            ]["GroupSaveDataMap"]["Map"]["value"][i]
+            if (
+                group_id["value"]["Struct"]["Struct"]["GroupType"]["Enum"]["value"]
+                == "EPalGroupType::Guild"
+            ):
+                group_raw_data = group_id["value"]["Struct"]["Struct"]["RawData"]["Array"][
+                    "value"
+                ]["Base"]["Byte"]["Byte"]
+                raw_data_len = len(group_raw_data)
+                for i in range(raw_data_len - 15):
+                    if group_raw_data[i : i + 16] == g.old_level_formatted:
+                        group_raw_data[i : i + 16] = g.new_level_formatted
+        print("Changes have been made to guild for " + g.name)
+
+        # Dump modified data to JSON.
+        with old_json_path.open('w') as f:
+            json.dump(old_json_sav, f, indent=2)
+        print("JSON files have been exported")
+
+        # Convert our JSON files to save files.
+        json_to_sav(uesave_path, old_json_path)
+        print("Converted JSON files back to save files")
+
+        # Clean up miscellaneous GVAS and JSON files which are no longer needed.
+        clean_up_files(old_sav_path)
+        print("Miscellaneous files removed")
+
+        # We must rename the patched save file from the old GUID to the new GUID for the server to recognize it.
+        if os.path.exists(new_sav_path):
+            os.remove(new_sav_path)
+        os.rename(old_sav_path, new_sav_path)
+
+    print("Writing level json..")
+    with level_json_path.open('w') as f:
         json.dump(level_json, f, indent=2)
-    print("JSON files have been exported")
-
-    # Convert our JSON files to save files.
     json_to_sav(uesave_path, level_json_path)
-    json_to_sav(uesave_path, old_json_path)
-    print("Converted JSON files back to save files")
-
-    # Clean up miscellaneous GVAS and JSON files which are no longer needed.
     clean_up_files(level_sav_path)
-    clean_up_files(old_sav_path)
-    print("Miscellaneous files removed")
-
-    # We must rename the patched save file from the old GUID to the new GUID for the server to recognize it.
-    if os.path.exists(new_sav_path):
-        os.remove(new_sav_path)
-    os.rename(old_sav_path, new_sav_path)
     print("Fix has been applied! Have fun!")
 
 
@@ -239,16 +245,17 @@ def sav_to_json(uesave_path: Path, file: Path):
             )
             return
         # Save the uncompressed file
-        with open(file + ".gvas", "wb") as f:
+        with open(file.with_suffix(".gvas"), "wb") as f:
             f.write(uncompressed_data)
         print(f"File {file} uncompressed successfully")
         # Convert to json with uesave
         # Run uesave.exe with the uncompressed file piped as stdin
         # Standard out will be the json string
         uesave_run = subprocess.run(
-            uesave_to_json_params(uesave_path, file + ".json"),
+            uesave_to_json_params(uesave_path, file.with_suffix(".json")),
             input=uncompressed_data,
             capture_output=True,
+            check=True
         )
         # Check if the command was successful
         if uesave_run.returncode != 0:
@@ -261,11 +268,11 @@ def sav_to_json(uesave_path: Path, file: Path):
         print(f"File {file} (type: {save_type}) converted to JSON successfully")
 
 
-def json_to_sav(uesave_path, file):
+def json_to_sav(uesave_path: Path, file: Path):
     # Convert the file back to binary
-    gvas_file = file.replace(".sav.json", ".sav.gvas")
-    sav_file = file.replace(".sav.json", ".sav")
-    uesave_run = subprocess.run(uesave_from_json_params(uesave_path, file, gvas_file))
+    gvas_file = file.with_suffix('.gvas')
+    sav_file = file.with_suffix(".sav")
+    uesave_run = subprocess.run(uesave_from_json_params(uesave_path, file, gvas_file), check=True)
     if uesave_run.returncode != 0:
         print(f"uesave.exe failed to convert {file} (return {uesave_run.returncode})")
         return
@@ -291,17 +298,17 @@ def json_to_sav(uesave_path, file):
     print(f"Converted {file} to {sav_file}")
 
 
-def clean_up_files(file):
-    os.remove(file + ".json")
-    os.remove(file + ".gvas")
+def clean_up_files(file: Path):
+    os.remove(file.with_suffix(".json"))
+    os.remove(file.with_suffix(".gvas"))
 
 
-def uesave_to_json_params(uesave_path, out_path):
+def uesave_to_json_params(uesave_path: Path, out_path: Path):
     args = [
-        uesave_path,
+        str(uesave_path),
         "to-json",
         "--output",
-        out_path,
+        str(out_path),
     ]
     for map_type in UESAVE_TYPE_MAPS:
         args.append("--type")
@@ -309,14 +316,14 @@ def uesave_to_json_params(uesave_path, out_path):
     return args
 
 
-def uesave_from_json_params(uesave_path, input_file, output_file):
+def uesave_from_json_params(uesave_path: Path, input_file: Path, output_file: Path):
     args = [
-        uesave_path,
+        str(uesave_path),
         "from-json",
         "--input",
-        input_file,
+        str(input_file),
         "--output",
-        output_file,
+        str(output_file),
     ]
     return args
 
